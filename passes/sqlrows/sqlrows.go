@@ -54,6 +54,7 @@ func checkInstr(pass *analysis.Pass, f *ssa.Function, b *ssa.BasicBlock, i int, 
 		pos      token.Pos
 		refs     *[]ssa.Instruction
 		dereffed bool
+		noassign bool
 	)
 
 	switch instr := b.Instrs[i].(type) {
@@ -64,6 +65,13 @@ func checkInstr(pass *analysis.Pass, f *ssa.Function, b *ssa.BasicBlock, i int, 
 		pos = instr.Pos()
 		refs = instr.Referrers()
 		dereffed = instr.Op == token.MUL
+	case *ssa.Phi:
+		pos = instr.Pos()
+		refs = instr.Referrers()
+		noassign = true
+		// TODO: either provide a warning about this type of programming or
+		// find the assignment in if/else-if/else/switch statements and ensure
+		// that Close is called only if the assignment is successful.
 	default:
 		pos = instr.Pos()
 	}
@@ -71,6 +79,9 @@ func checkInstr(pass *analysis.Pass, f *ssa.Function, b *ssa.BasicBlock, i int, 
 	if called {
 		if dereffed {
 			pass.Reportf(pos, "*sql.Rows is dereferenced when closed")
+		}
+		if noassign {
+			pass.Reportf(pos, "*sql.Rows declared without assignment; false positives are expected")
 		}
 		if !deferred(pass, *refs) {
 			pass.Reportf(pos, "rows.Close must be called in defer function")
