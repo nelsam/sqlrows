@@ -40,6 +40,39 @@ var Analyzer = &analysis.Analyzer{
 	Run: run,
 }
 
+func deferred(pass *analysis.Pass, refs []ssa.Instruction) bool {
+	for _, ref := range refs {
+		if _, ok := ref.(*ssa.Defer); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func checkInstr(pass *analysis.Pass, f *ssa.Function, b *ssa.BasicBlock, i int, methods []*types.Func, rowsType types.Type) {
+	var (
+		pos  token.Pos
+		refs *[]ssa.Instruction
+	)
+
+	switch instr := b.Instrs[i].(type) {
+	case *ssa.Extract:
+		pos = instr.Tuple.Pos()
+		refs = instr.Referrers()
+	default:
+		pos = instr.Pos()
+	}
+	called, ok := sqlrowsutil.CalledFrom(b, i, rowsType, methods...)
+	if called {
+		if !deferred(pass, *refs) {
+			pass.Reportf(pos, "rows.Close must be called in defer function")
+		}
+	}
+	if ok && !called {
+		pass.Reportf(pos, "rows.Close must be called")
+	}
+}
+
 func run(pass *analysis.Pass) (interface{}, error) {
 	funcs := pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA).SrcFuncs
 	inspect := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
@@ -64,30 +97,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	for _, f := range funcs {
 		for _, b := range f.Blocks {
 			for i := range b.Instrs {
-				var pos token.Pos
-				var refs *[]ssa.Instruction
-				switch instr := b.Instrs[i].(type) {
-				case *ssa.Extract:
-					pos = instr.Tuple.Pos()
-					refs = instr.Referrers()
-				default:
-					pos = instr.Pos()
-				}
-				called, ok := sqlrowsutil.CalledFrom(b, i, rowsType, methods...)
-				if called {
-					var defered bool
-					for _, ref := range *refs {
-						if _, ok := ref.(*ssa.Defer); ok {
-							defered = true
-						}
-					}
-					if !defered {
-						pass.Reportf(pos, "rows.Close must be called in defer function")
-					}
-				}
-				if ok && !called {
-					pass.Reportf(pos, "rows.Close must be called")
-				}
+				checkInstr(pass, f, b, i, methods, rowsType)
 			}
 		}
 	}
