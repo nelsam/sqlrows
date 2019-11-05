@@ -51,19 +51,27 @@ func deferred(pass *analysis.Pass, refs []ssa.Instruction) bool {
 
 func checkInstr(pass *analysis.Pass, f *ssa.Function, b *ssa.BasicBlock, i int, methods []*types.Func, rowsType types.Type) {
 	var (
-		pos  token.Pos
-		refs *[]ssa.Instruction
+		pos      token.Pos
+		refs     *[]ssa.Instruction
+		dereffed bool
 	)
 
 	switch instr := b.Instrs[i].(type) {
 	case *ssa.Extract:
 		pos = instr.Tuple.Pos()
 		refs = instr.Referrers()
+	case *ssa.UnOp:
+		pos = instr.Pos()
+		refs = instr.Referrers()
+		dereffed = instr.Op == token.MUL
 	default:
 		pos = instr.Pos()
 	}
 	called, ok := sqlrowsutil.CalledFrom(b, i, rowsType, methods...)
 	if called {
+		if dereffed {
+			pass.Reportf(pos, "*sql.Rows is dereferenced when closed")
+		}
 		if !deferred(pass, *refs) {
 			pass.Reportf(pos, "rows.Close must be called in defer function")
 		}
